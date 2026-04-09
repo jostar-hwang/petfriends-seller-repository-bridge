@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -E \"^[^/]*domain[^/]*\\\\.java$|Product\\\\.java|Order\\\\.java|Coupon\")",
+      "Bash(xargs grep:*)"
+    ]
+  }
+}
