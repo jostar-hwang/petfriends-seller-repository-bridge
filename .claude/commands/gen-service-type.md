@@ -11,9 +11,40 @@
 - `apps/petfriends-backend-seller/api/src/main/java/` 하위에서 `$ARGUMENTS`에 해당하는 `@RequestMapping` 또는 `@GetMapping`/`@PostMapping` 등이 있는 Controller 파일을 찾는다.
 - Controller 메서드의 반환 타입(Response DTO)을 확인한다.
 
-### 2. Response DTO 역추적
+> ⚠️ **`@ApiResponse @Schema`를 실제 응답 타입으로 신뢰하지 말 것**
+>
+> 컨트롤러 반환 타입이 `ResponseEntity<?>`(와일드카드)인 경우, `@Schema(implementation = SomeDto.class)`는 Swagger 문서용 어노테이션일 뿐이며 실제 런타임 응답 타입과 다를 수 있다.
+> 반드시 컨트롤러가 호출하는 **UseCase/Service 메서드의 실제 반환 타입 import**를 끝까지 추적한다.
+>
+> ```java
+> // ❌ 이것만 보고 응답 타입을 결론 내리지 말 것
+> @ApiResponse(content = { @Content(schema = @Schema(implementation = SomeFlatDto.class)) })
+> public ResponseEntity<?> getProduct(...) {
+>     return CommonResponse.setResponse(useCase.getProduct(id)); // ← 실제 타입은 여기
+> }
+> ```
+>
+> **추적 순서**: Controller → UseCase `import` 구문 → 실제 반환 DTO 클래스
+
+> ⚠️ **같은 이름의 DTO가 여러 패키지에 존재할 수 있음**
+>
+> 예: `list/ProductDetailResponse`(Swagger 참조용 플랫 구조)와 `productdetail/ProductDetailResponse`(UseCase 실제 반환 중첩 구조)처럼 동일한 클래스명이 다른 패키지에 공존할 수 있다.
+> 처음 발견한 것에서 탐색을 멈추지 말고, **UseCase의 `import` 구문에서 어느 패키지 것인지 반드시 확인**한다.
+
+### 2. Response DTO 역추적 — 요청 DTO와 응답 DTO를 반드시 구분
 - Controller가 반환하는 DTO 클래스를 찾아 모든 필드를 파악한다.
 - 중첩된 DTO/Entity/Enum이 있으면 재귀적으로 추적한다.
+
+> ⚠️ **요청(Request) DTO와 응답(Response) DTO를 혼동하지 말 것**
+>
+> 같은 도메인에 이름이 유사한 DTO가 request용/response용으로 따로 존재할 수 있다.
+> 예: `ProductAttributeDto`(request — `productAttributeGroup2Id`만 포함)와 `OriginProductAttributeDto`(response — 표시용 name 필드 전체 포함).
+>
+> 프론트엔드 타입은 반드시 **응답 DTO** 기준으로 작성한다.
+> 응답 DTO는 Controller → UseCase 반환 타입을 추적하면 찾을 수 있으며, `Origin*`, `*Response`, `*Dto` 등 네이밍이 다를 수 있으므로 클래스 파일을 직접 열어 필드를 확인한다.
+>
+> - `@JsonProperty`가 붙은 getter 메서드는 직렬화 시 JSON에 포함되므로 **가상 필드**로 타입에 반드시 추가한다.
+> - `@JsonProperty` 가상 필드가 `String.format()` 등으로 항상 값을 반환하는 경우 `Nullable`이 아닌 `string`으로 선언한다.
 - 다음 Java → TypeScript 직렬화 규칙을 적용한다:
 
 | Java 타입 | TypeScript 타입 | 비고 |
