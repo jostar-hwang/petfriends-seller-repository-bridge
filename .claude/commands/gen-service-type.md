@@ -7,8 +7,38 @@
 
 ## 작업 순서
 
+### 0. 적용 적합성 판단 (1차 필터)
+
+본격적인 탐색 전에 아래 기준으로 적합성을 먼저 판단한다.
+
+**PATH 키워드 확인:**
+
+| 조건 | 판단 |
+|---|---|
+| PATH에 `create`, `register`, `write`, `update`, `edit`, `modify`, `save` 등이 포함 | ⛔ 부적합 가능성 높음 |
+| POST / PUT / PATCH 엔드포인트 (Controller 확인 후) | ⛔ 부적합 가능성 높음 |
+| GET 목록/상세 엔드포인트 | ✅ 적합 가능성 높음 |
+
+> ⛔ **부적합 판정 시 즉시 중단**
+>
+> 아래 메시지를 출력하고 사용자 확인을 요청한다. 탐색을 진행하지 않는다.
+>
+> ```
+> ⚠️ 이 API는 등록/수정 계열로 보입니다.
+> 등록/수정 타입은 기존 폼 인터페이스와 결합이 강한 경우가 많아
+> 타입 생성 시 대규모 수정이 발생하거나 어댑터 함수가 필요해질 수 있습니다.
+>
+> 계속 진행하시겠습니까? (y/n)
+> ```
+>
+> - `y` 응답: Step 1부터 정상 진행한다.
+> - `n` 응답: 작업을 종료한다.
+
+---
+
 ### 1. 백엔드 Controller 탐색
 - `apps/petfriends-backend-seller/api/src/main/java/` 하위에서 `$ARGUMENTS`에 해당하는 `@RequestMapping` 또는 `@GetMapping`/`@PostMapping` 등이 있는 Controller 파일을 찾는다.
+- Controller 메서드의 HTTP Method(`@GetMapping`, `@PostMapping` 등)를 확인하고, POST/PUT/PATCH라면 Step 0의 부적합 판정 흐름을 따른다.
 - Controller 메서드의 반환 타입(Response DTO)을 확인한다.
 
 > ⚠️ **`@ApiResponse @Schema`를 실제 응답 타입으로 신뢰하지 말 것**
@@ -45,20 +75,28 @@
 >
 > - `@JsonProperty`가 붙은 getter 메서드는 직렬화 시 JSON에 포함되므로 **가상 필드**로 타입에 반드시 추가한다.
 > - `@JsonProperty` 가상 필드가 `String.format()` 등으로 항상 값을 반환하는 경우 `Nullable`이 아닌 `string`으로 선언한다.
+> - `@JsonIgnore`가 붙은 필드는 JSON 응답에 포함되지 않으므로 **타입에서 제외**한다.
+> - `@JsonInclude(NON_NULL)` 등이 붙은 필드는 조건에 따라 JSON에 포함되지 않을 수 있으므로 **nullable 처리**한다.
+
+> ⚠️ **`CommonResponse` 래퍼는 타입 모델링에서 제외**
+>
+> 백엔드가 `CommonResponse.setResponse(data)` 형태로 응답을 감싸더라도, 프론트엔드 HTTP 클라이언트가 래퍼를 벗겨내므로 타입 모델링 대상은 내부 데이터 타입(`T`)만이다.
+> `{ code, message, data }` 같은 래퍼 구조를 타입에 포함하지 않는다.
+
 - 다음 Java → TypeScript 직렬화 규칙을 적용한다:
 
 | Java 타입 | TypeScript 타입 | 비고 |
 |---|---|---|
 | `LocalDate` | `string` | ISO 형식 `"YYYY-MM-DD"` |
 | `LocalDateTime` | `string` | ISO 형식 `"YYYY-MM-DDTHH:mm:ss"` |
-| `Enum` | string literal union | enum의 `name()` 기준, 예: `'SALE' \| 'STANDBY'` |
+| `Enum` | string literal union | `name()` 기준. `@JsonValue`가 붙은 경우 해당 메서드 반환값 기준으로 직렬화되므로 반드시 확인 |
 | `YNType` | `'Y' \| 'N'` | |
 | `Integer` / `Long` | `number` | |
 | `Boolean` | `boolean` | |
 | `String` | `string` | |
-| nullable/Optional 필드 | `T \| null` | |
+| nullable/Optional 필드 | `Nullable<T>` | |
 | `List<E>` | `T[]` | |
-| `BigDecimal` / `Double` | `number` | |
+| `BigDecimal` / `Double` | `number` | 백엔드 직렬화 설정에 따라 `string`으로 내려올 수 있으므로 실제 응답 확인 필요 |
 
 ### 3. 도메인 분류
 - API PATH에서 도메인을 추론한다 (예: `/products` → product, `/orders` → order).
@@ -72,6 +110,21 @@
 - `index.ts`는 분리된 파일을 `export { Foo } from './foo'`로 re-export하여 외부 import 경로(`@commons/services/{domain}`)가 변하지 않도록 유지한다.
 - 부 namespace 파일의 타입을 주 namespace 파일에서 참조해야 할 경우 `import type { Foo } from './foo'`로 가져온다.
 
+**namespace 적용 범위:**
+
+namespace는 아래 기준을 모두 충족하는 타입에만 사용한다. (Step 0 부적합 기준과 동일)
+
+| 기준 | 적합 | 부적합 |
+|---|---|---|
+| HTTP Method | GET (조회) | POST/PUT/PATCH (등록/수정) |
+| 타입의 소비 패턴 | API 응답을 그대로 렌더링 | 사용자 입력과 연동되는 폼 상태 |
+| 서버→클라이언트 변환 필요 여부 | 변환 없이 그대로 사용 가능 | 가공/매핑이 필요한 구조 |
+
+> **교훈:** `ProductWriteV3` 등록/수정 화면에서 namespace 타입 생성을 시도한 결과,
+> 기존 인터페이스와의 결합이 강해 서버 타입으로 전환 시 대규모 수정이 필요했고,
+> 이를 피하기 위한 어댑터 함수는 코드 가독성을 크게 해쳤다.
+> 이 경우 타입 생성을 포기하고 기존 타입을 그대로 사용하는 것이 옳다.
+
 **현재 product 도메인 구조 (참고):**
 ```
 src/commons/services/product/
@@ -81,13 +134,13 @@ src/commons/services/product/
 `index.ts`에서 `export { SellerRequest } from './request'`로 re-export하므로  
 외부에서는 `import { Product, SellerRequest } from '@commons/services/product'` 그대로 사용한다.
 
-- 기존 파일이 있으면 기존 내용을 유지하면서 타입을 추가/병합한다.
+- 기존 파일이 있으면 기존 내용을 유지하면서 타입을 추가/병합한다. 기존 타입과 이름이 충돌하면 병합하지 않고 사용자에게 확인을 요청한다.
 
 ### 4. 타입 생성 규칙
 
 **Nullable 규칙:**
 - `T | null` 형태는 반드시 `Nullable<T>`로 표기한다.
-- 파일 상단에 `import type { Nullable } from '@teampetfriends/util-types';`를 추가한다.
+- nullable 필드가 하나 이상 존재하는 경우에만 파일 상단에 `import type { Nullable } from '@teampetfriends/util-types';`를 추가한다.
 
 ```typescript
 // ✅
@@ -175,6 +228,20 @@ export type SellerRequest = {
 - 일회성/페이지 전용 Response 타입(파라미터, 리스트 래퍼 등)은 이 파일에 넣지 않는다.
 - 이미 `src/commons/services/`에 동일한 타입이 있으면 중복 생성하지 않고 재사용을 안내한다.
 
+### 4.5. 지역 타입 결합 여부 확인 (Step 5 실행 전 선행 판단)
+
+타입 대체(Step 5) 전에 아래를 확인하고 진행 여부를 결정한다.
+
+- `pages/{domain}/modules/interfaces.ts` 또는 유사 파일이 존재하는지 확인한다.
+- 존재한다면, 해당 타입이 컴포넌트에서 **form state / props 타입**으로 직접 사용되고 있는지 확인한다.
+- 그렇다면 Step 5(기존 타입 대체)를 건너뛰고 사용자에게 아래와 같이 안내한다:
+
+  ```
+  ℹ️ pages/{domain}/modules/interfaces.ts의 타입이 폼 상태/props로 직접 사용되고 있어
+  공통 타입으로의 대체를 건너뜁니다.
+  서버 타입과 맞추려면 별도 어댑터 함수가 필요합니다.
+  ```
+
 ### 5. 기존 지역 타입을 공통 타입으로 대체
 새로 만든 공통 타입과 의미상 동일한 지역 타입이 존재하면 전면 대체한다.
 
@@ -187,6 +254,8 @@ export type SellerRequest = {
 **대체 판단 기준:**
 - 필드 구조가 실질적으로 동일하면 대체한다
 - 지역 타입이 공통 타입보다 필드가 많거나 적으면(일부만 겹침) 대체하지 않고 사용자에게 확인을 요청한다
+- 지역 타입이 컴포넌트의 **폼 상태(form state) / props 타입**으로 직접 사용되고 있으면 대체하지 않는다. 서버 타입과 맞추려면 어댑터 함수가 필요해지고 코드 가독성을 해친다
+- 대체 시 기존 코드 변경 범위가 지나치게 넓다면(다수의 컴포넌트/훅에 영향) 대체를 포기하고 사용자에게 사유를 보고한다
 
 **예시:**
 ```typescript
@@ -208,9 +277,31 @@ const { data } = await client(true).get<Product['Item'][]>('/products');
 
 ### 6. 결과 보고
 작업 완료 후 아래 형식으로 요약한다:
-- 탐색한 Controller / DTO 파일 경로
-- 생성/수정한 파일 경로 목록
-- 생성된 타입 목록
-- JSON 직렬화 변환이 적용된 필드와 그 이유
-- 기존 지역 타입에서 대체한 타입 목록
-- 사용자 확인이 필요한 애매한 타입 (있을 경우)
+
+```
+## 타입 생성 결과
+
+### 탐색 경로
+- Controller: apps/petfriends-backend-seller/.../ProductController.java
+- UseCase:    apps/petfriends-backend-seller/.../GetProductUseCase.java
+- DTO:        apps/petfriends-backend-seller/.../ProductDetailResponse.java
+
+### 생성/수정 파일
+- [생성] src/commons/services/product/index.ts
+- [수정] src/commons/services/product/request.ts
+
+### 생성된 타입
+- Product.Item
+- Product.Status ('SALE' | 'STANDBY' | 'PAUSE_SOLD_OUT' | 'STOP_SALE')
+
+### 직렬화 변환 적용 필드
+- `registeredAt`: LocalDateTime → string (ISO 형식)
+- `status`: Enum → 'SALE' | 'STANDBY' | ... (name() 기준)
+- `sellingPrice`: BigDecimal → number (실제 응답 숫자 확인 완료)
+
+### 지역 타입 대체
+- pages/product/modules/interfaces.ts의 ProductInquireItem → Product.Item으로 대체
+
+### 사용자 확인 필요
+- (없음) 또는 구체적 사유 기재
+```
